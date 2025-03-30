@@ -28,6 +28,17 @@ uint8_t macOdbiorcaESP8266[] = {0x48, 0xE7, 0x29, 0x46, 0x66, 0x8D};  // Wpisz t
 // Zmienna określająca, który odbiornik jest aktywny
 bool useESP32Receiver = true;  // true = ESP32, false = ESP8266
 
+// Kalibracja joysticków – śledzenie zakresów
+int joy1_x_min = 4095, joy1_x_max = 0;
+int joy1_y_min = 4095, joy1_y_max = 0;
+int joy2_x_min = 4095, joy2_x_max = 0;
+int joy2_y_min = 4095, joy2_y_max = 0;
+// Do wyliczenia wartości środkowych (neutralnych)
+long joy1_x_center_sum = 0, joy1_y_center_sum = 0;
+long joy2_x_center_sum = 0, joy2_y_center_sum = 0;
+int centerSampleCount = 0;
+bool centerCaptured = false;
+
 typedef struct struct_message {
     bool L1Pressed;
     bool L2Pressed;
@@ -108,6 +119,57 @@ void switchReceiver() {
 
 bool lastSwitchState = HIGH;
 
+void trackJoystickExtremes(int j1x, int j1y, int j2x, int j2y) {
+    bool updated = false;
+
+    if (j1x < joy1_x_min) { joy1_x_min = j1x; updated = true; }
+    if (j1x > joy1_x_max) { joy1_x_max = j1x; updated = true; }
+
+    if (j1y < joy1_y_min) { joy1_y_min = j1y; updated = true; }
+    if (j1y > joy1_y_max) { joy1_y_max = j1y; updated = true; }
+
+    if (j2x < joy2_x_min) { joy2_x_min = j2x; updated = true; }
+    if (j2x > joy2_x_max) { joy2_x_max = j2x; updated = true; }
+
+    if (j2y < joy2_y_min) { joy2_y_min = j2y; updated = true; }
+    if (j2y > joy2_y_max) { joy2_y_max = j2y; updated = true; }
+
+    if (updated) {
+        Serial.println("=== Nowe zakresy joysticków ===");
+        Serial.printf("JOY1_X: min=%d, max=%d\n", joy1_x_min, joy1_x_max);
+        Serial.printf("JOY1_Y: min=%d, max=%d\n", joy1_y_min, joy1_y_max);
+        Serial.printf("JOY2_X: min=%d, max=%d\n", joy2_x_min, joy2_x_max);
+        Serial.printf("JOY2_Y: min=%d, max=%d\n", joy2_y_min, joy2_y_max);
+        Serial.println("===============================");
+    }
+}
+
+void captureCenterValues(int j1x, int j1y, int j2x, int j2y) {
+    if (centerCaptured || centerSampleCount >= 100) return;
+
+    joy1_x_center_sum += j1x;
+    joy1_y_center_sum += j1y;
+    joy2_x_center_sum += j2x;
+    joy2_y_center_sum += j2y;
+    centerSampleCount++;
+
+    if (centerSampleCount == 100) {
+        int joy1_x_center = joy1_x_center_sum / 100;
+        int joy1_y_center = joy1_y_center_sum / 100;
+        int joy2_x_center = joy2_x_center_sum / 100;
+        int joy2_y_center = joy2_y_center_sum / 100;
+
+        Serial.println("=== Środkowe wartości joysticków (stan spoczynku) ===");
+        Serial.printf("JOY1_X center: %d\n", joy1_x_center);
+        Serial.printf("JOY1_Y center: %d\n", joy1_y_center);
+        Serial.printf("JOY2_X center: %d\n", joy2_x_center);
+        Serial.printf("JOY2_Y center: %d\n", joy2_y_center);
+        Serial.println("======================================================");
+
+        centerCaptured = true;  // tylko raz
+    }
+}
+
 void setup() {
     Serial.begin(115200);
     WiFi.mode(WIFI_STA);  
@@ -172,27 +234,36 @@ void loop() {
     int raw_joy2_x = analogRead(JOY2_X);
     int raw_joy2_y = analogRead(JOY2_Y);
 
-    // Mapowanie wartości joysticków do zakresu -100 do 100
-    command.joy1_x = mapJoystick(raw_joy1_x, 668, 4095, 2728, -100, 100);
-    command.joy1_y = mapJoystick(raw_joy1_y, 791, 4095, 2734, -100, 100);
-    command.joy2_x = mapJoystick(raw_joy2_x, 1140, 4095, 2810, -100, 100);
-    command.joy2_y = mapJoystick(raw_joy2_y, 1380, 4095, 2750, -100, 100);
+    // Serial.print("JOY1_X: "); Serial.print(raw_joy1_x);
+    // Serial.print(" | JOY1_Y: "); Serial.print(raw_joy1_y);
+    // Serial.print(" || JOY2_X: "); Serial.print(raw_joy2_x);
+    // Serial.print(" | JOY2_Y: "); Serial.println(raw_joy2_y);
 
-    // Deadzone dla joysticków (-5 do 5 ustawiamy na 0)
+    // Śledzenie zakresów (możesz zakomentować później)
+    //trackJoystickExtremes(raw_joy1_x, raw_joy1_y, raw_joy2_x, raw_joy2_y);
+    //captureCenterValues(raw_joy1_x, raw_joy1_y, raw_joy2_x, raw_joy2_y);
+
+    // Mapowanie wartości joysticków do zakresu -100 do 100
+    command.joy1_x = mapJoystick(raw_joy1_x, 410, 4095, 2876, 1000, -1000);
+    command.joy1_y = mapJoystick(raw_joy1_y, 269, 4095, 2885, 1000, -1000);
+    command.joy2_x = mapJoystick(raw_joy2_x, 633, 4095, 2961, 1000, -1000);
+    command.joy2_y = mapJoystick(raw_joy2_y, 501, 4095, 2897, 1000, -1000);
+
+    // Deadzone dla joysticków 
     if (abs(command.joy1_x) <= 20) command.joy1_x = 0;
     if (abs(command.joy1_y) <= 20) command.joy1_y = 0;
     if (abs(command.joy2_x) <= 20) command.joy2_x = 0;
     if (abs(command.joy2_y) <= 20) command.joy2_y = 0;
 
     // Sprawdzanie czy przyciski zostały wciśnięte i wyświetlanie w konsoli
-    if (command.L1Pressed != lastCommand.L1Pressed) Serial.println(command.L1Pressed ? "L1 Wciśnięty" : "L1 Puszczony");
-    if (command.L2Pressed != lastCommand.L2Pressed) Serial.println(command.L2Pressed ? "L2 Wciśnięty" : "L2 Puszczony");
-    if (command.L3Pressed != lastCommand.L3Pressed) Serial.println(command.L3Pressed ? "L3 Wciśnięty" : "L3 Puszczony");
-    if (command.L4Pressed != lastCommand.L4Pressed) Serial.println(command.L4Pressed ? "L4 Wciśnięty" : "L4 Puszczony");
-    if (command.R1Pressed != lastCommand.R1Pressed) Serial.println(command.R1Pressed ? "R1 Wciśnięty" : "R1 Puszczony");
-    if (command.R2Pressed != lastCommand.R2Pressed) Serial.println(command.R2Pressed ? "R2 Wciśnięty" : "R2 Puszczony");
-    if (command.R3Pressed != lastCommand.R3Pressed) Serial.println(command.R3Pressed ? "R3 Wciśnięty" : "R3 Puszczony");
-    if (command.R4Pressed != lastCommand.R4Pressed) Serial.println(command.R4Pressed ? "R4 Wciśnięty" : "R4 Puszczony");
+    // if (command.L1Pressed != lastCommand.L1Pressed) Serial.println(command.L1Pressed ? "L1 Wciśnięty" : "L1 Puszczony");
+    // if (command.L2Pressed != lastCommand.L2Pressed) Serial.println(command.L2Pressed ? "L2 Wciśnięty" : "L2 Puszczony");
+    // if (command.L3Pressed != lastCommand.L3Pressed) Serial.println(command.L3Pressed ? "L3 Wciśnięty" : "L3 Puszczony");
+    // if (command.L4Pressed != lastCommand.L4Pressed) Serial.println(command.L4Pressed ? "L4 Wciśnięty" : "L4 Puszczony");
+    // if (command.R1Pressed != lastCommand.R1Pressed) Serial.println(command.R1Pressed ? "R1 Wciśnięty" : "R1 Puszczony");
+    // if (command.R2Pressed != lastCommand.R2Pressed) Serial.println(command.R2Pressed ? "R2 Wciśnięty" : "R2 Puszczony");
+    // if (command.R3Pressed != lastCommand.R3Pressed) Serial.println(command.R3Pressed ? "R3 Wciśnięty" : "R3 Puszczony");
+    // if (command.R4Pressed != lastCommand.R4Pressed) Serial.println(command.R4Pressed ? "R4 Wciśnięty" : "R4 Puszczony");
 
     // Sprawdzanie czy joysticki zostały przesunięte
     if (abs(command.joy1_x - lastCommand.joy1_x) > 5) Serial.printf("Joystick 1 X: %d\n", command.joy1_x);
