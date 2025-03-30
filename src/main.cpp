@@ -22,11 +22,13 @@
 #define SWITCH_DEVICE_PIN 21  
 
 // Adresy MAC odbiorników
-uint8_t macOdbiorcaESP32[] = {0x5C, 0x01, 0x3B, 0x6C, 0x1C, 0x48};  // Adres MAC odbiornika ESP32
-uint8_t macOdbiorcaESP8266[] = {0x48, 0xE7, 0x29, 0x46, 0x66, 0x8D};  // Wpisz tutaj prawidłowy adres MAC odbiornika ESP8266
+uint8_t macESP32[]      = {0x5C, 0x01, 0x3B, 0x6C, 0x1C, 0x48};
+uint8_t macESP8266_1[]  = {0x48, 0xE7, 0x29, 0x46, 0x66, 0x8D};
+uint8_t macESP8266_2[]  = {0x48, 0x3f, 0xda, 0x9d, 0xe6, 0x21};
 
-// Zmienna określająca, który odbiornik jest aktywny
-bool useESP32Receiver = true;  // true = ESP32, false = ESP8266
+const int RECEIVER_COUNT = 3;
+uint8_t receivers[RECEIVER_COUNT][6];
+int currentReceiverIndex = 0;  // 0: ESP32, 1: ESP8266_1, 2: ESP8266_2
 
 // Kalibracja joysticków – śledzenie zakresów
 int joy1_x_min = 4095, joy1_x_max = 0;
@@ -106,17 +108,18 @@ void addPeer(uint8_t* macAddress) {
 }
 
 void switchReceiver() {
-    useESP32Receiver = !useESP32Receiver;
-    
-    if (useESP32Receiver) {
-        Serial.println("Przełączono na odbiornik ESP32");
-        addPeer(macOdbiorcaESP32);
-    } else {
-        Serial.println("Przełączono na odbiornik ESP8266");
-        addPeer(macOdbiorcaESP8266);
-    }
-}
+    currentReceiverIndex = (currentReceiverIndex + 1) % RECEIVER_COUNT;
+    addPeer(receivers[currentReceiverIndex]);
 
+    Serial.print("Przełączono na odbiornik [");
+    Serial.print(currentReceiverIndex);
+    Serial.print("]: ");
+    for (int i = 0; i < 6; i++) {
+        if (i > 0) Serial.print(":");
+        Serial.print(receivers[currentReceiverIndex][i], HEX);
+    }
+    Serial.println();
+}
 bool lastSwitchState = HIGH;
 
 void trackJoystickExtremes(int j1x, int j1y, int j2x, int j2y) {
@@ -184,8 +187,11 @@ void setup() {
 
     esp_now_register_send_cb(onSent);
 
-    // Domyślnie ustaw ESP32 jako odbiornik
-    addPeer(macOdbiorcaESP32);
+    memcpy(receivers[0], macESP32, 6);
+    memcpy(receivers[1], macESP8266_1, 6);
+    memcpy(receivers[2], macESP8266_2, 6);
+
+    addPeer(receivers[currentReceiverIndex]);
 
     // Konfiguracja pinów przycisków
     pinMode(L1_PIN, INPUT_PULLUP);
@@ -212,10 +218,10 @@ void loop() {
     // Sprawdź stan przycisku przełączania
     bool currentSwitchState = digitalRead(SWITCH_DEVICE_PIN);
     if (currentSwitchState == LOW && lastSwitchState == HIGH) {
-        // Przycisk został wciśnięty - przełącz odbiornik
         switchReceiver();
-        delay(200);  // Prosta debounce
+        delay(200);
     }
+
     lastSwitchState = currentSwitchState;
 
     // Odczyt stanu przycisków (LOW oznacza wciśnięty)
@@ -272,8 +278,7 @@ void loop() {
     if (abs(command.joy2_y - lastCommand.joy2_y) > 5) Serial.printf("Joystick 2 Y: %d\n", command.joy2_y);
 
     // Wysłanie danych ESP-NOW do aktualnie wybranego odbiornika
-    uint8_t* currentReceiver = useESP32Receiver ? macOdbiorcaESP32 : macOdbiorcaESP8266;
-    esp_err_t result = esp_now_send(currentReceiver, (uint8_t *)&command, sizeof(command));
+    esp_err_t result = esp_now_send(receivers[currentReceiverIndex], (uint8_t *)&command, sizeof(command));
     
     if (result != ESP_OK) {
         Serial.println("Błąd wysyłania!");
